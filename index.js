@@ -11,7 +11,9 @@ const NotificationModel = require("./models/NotificationModel");
 const logger = require("./config/logger");
 const expressStatusMonitor = require("express-status-monitor");
 
-// استيراد الراوترات
+const { createCloudinaryStorage } = require("./config/cloudinaryConfig");
+
+// الراوترات
 const userRouter = require("./router/UsersRouter");
 const forumRouter = require("./router/forumRoutes");
 const MessagesProjectRoutes = require("./router/messagesProjectRoutes");
@@ -32,83 +34,77 @@ const adminJobProjectSettingsRoutes = require("./router/adminJobProjectSettingsR
 const adminUsersRoutes = require("./router/adminUsersRoutes");
 const changePasswordRoutes = require("./router/changePasswordRoutes");
 const storeRoutes = require("./router/StoreRoutes");
+
 const errorHandler = require("./middleware/errorHandler");
 const GlobalRoleController = require("./controllers/GlobalRoleController");
 const ForumController = require("./controllers/ForumController");
-
-// استيراد الميدلوير الجديد للميتا الديناميكية
 const dynamicMetaMiddleware = require("./middleware/dynamicMetaMiddleware");
 
 const app = express();
 const server = http.createServer(app);
-// تفعيل الضغط
+
+// الضغط والتصغير والمراقبة
 app.use(compression());
-// تفعيل تصغير الملفات (CSS, JS)
 app.use(minify());
 app.use(expressStatusMonitor());
-// إعداد التخزين للملفات المرفوعة
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    if (file.fieldname === "avatar") {
-      cb(null, "uploads/avatars");
-    } else if (file.fieldname === "postImages") {
-      cb(null, "uploads/images");
-    } else if (file.fieldname === "messageImage") {
-      cb(null, "uploads/messages");
-    }
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
+
+// التخزين على Cloudinary
+const storage = createCloudinaryStorage("general");
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
   },
 });
-const upload = multer({ storage: storage });
-// إعدادات البرامج الوسيطة
+
+// إعدادات أساسية
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
-app.use(
-  session({
-    secret: "your_jwt_secret",
-    resave: true,
-    saveUninitialized: true,
-    cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 24 * 60 * 60 * 1000 }, // 24 hours
-  })
-);
-// إعداد محرك العرض
+app.use(session({
+  secret: "your_jwt_secret",
+  resave: true,
+  saveUninitialized: true,
+  cookie: {
+    secure: process.env.NODE_ENV === "production",
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000,
+  },
+}));
+
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
-// تحسين تقديم الملفات الثابتة مع تفعيل التخزين المؤقت
+
 app.use(express.static(path.join(__dirname, "public"), {
-  maxAge: '1d', // تخزين مؤقت لمدة يوم واحد
-  etag: true
-}));
-app.use("/uploads", express.static(path.resolve(__dirname, "uploads"), {
-  maxAge: '1d',
-  etag: true
+  maxAge: "1d",
+  etag: true,
 }));
 
-// إضافة الميدلوير الجديد للميتا الديناميكية
+// ميتا
 app.use(dynamicMetaMiddleware);
 
-// Middleware لحساب unreadCount وتمريره إلى جميع الصفحات
+// unreadCount
 app.use(async (req, res, next) => {
-  if (req.session && req.session.userId) {
+  if (req.session?.userId) {
     try {
       const unreadCount = await NotificationModel.getUnreadCount(req.session.userId);
       res.locals.unreadCount = unreadCount || 0;
     } catch (err) {
-      logger.error("حدث خطأ أثناء حساب unreadCount:", err);
+      logger.error("unreadCount error:", err);
     }
   } else {
     res.locals.unreadCount = 0;
   }
   next();
 });
-// تطبيق Middleware عالمي للتحقق من الدور
+
+// دور المستخدم
 app.use(GlobalRoleController.setGlobalRole);
-// جعل صفحة المنتدى هي الصفحة الرئيسية
+
+// الصفحة الرئيسية
 app.get("/", ForumController.getAllPosts);
-// دمج الراوترات
+
+// الراوترات
 app.use("/", userRouter);
 app.use("/", changePasswordRoutes);
 app.use("/friends", friendshipRoutes);
@@ -130,58 +126,56 @@ app.use("/admin", adminForumSettingsRoutes);
 app.use("/admin", adminJobProjectSettingsRoutes);
 app.use("/admin", adminUsersRoutes);
 app.use("/", require("./router/GlobalRoleRouter"));
-// مسارات ثابتة للصفحات
-app.get('/about', (req, res) => {
-  // إضافة بيانات الصفحة للميتا الديناميكية
-  res.locals.pageName = 'about';
-  res.render('about', { 
+
+// صفحات ثابتة
+app.get("/about", (req, res) => {
+  res.locals.pageName = "about";
+  res.render("about", {
     unreadCount: res.locals.unreadCount,
     userId: res.locals.userId,
-    isAdmin: res.locals.isAdmin 
+    isAdmin: res.locals.isAdmin,
   });
 });
 
-app.get('/privacy', (req, res) => {
-  // إضافة بيانات الصفحة للميتا الديناميكية
-  res.locals.pageName = 'privacy';
-  res.render('privacy', { 
+app.get("/privacy", (req, res) => {
+  res.locals.pageName = "privacy";
+  res.render("privacy", {
     unreadCount: res.locals.unreadCount,
     userId: res.locals.userId,
-    isAdmin: res.locals.isAdmin 
+    isAdmin: res.locals.isAdmin,
   });
 });
 
-// مسار مستقل لـ /ProjectSpace
 app.get("/ProjectSpace", (req, res) => {
-  // إضافة بيانات الصفحة للميتا الديناميكية
-  res.locals.pageName = 'ProjectSpace';
+  res.locals.pageName = "ProjectSpace";
   res.render("ProjectSpace", {
     errorMessage: null,
     successMessage: null,
     userId: res.locals.userId,
     isAdmin: res.locals.isAdmin,
-    unreadCount: res.locals.unreadCount
+    unreadCount: res.locals.unreadCount,
   });
 });
-// جدولة حذف الإعلانات القديمة
-cron.schedule('0 0 * * *', async () => {
+
+// حذف الإعلانات القديمة
+cron.schedule("0 0 * * *", async () => {
   try {
-    const forumModel = require("./models/forumModel"); // تصحيح حالة الأحرف في اسم الملف
+    const forumModel = require("./models/forumModel");
     await forumModel.deleteOldAds();
-    console.log('Scheduled deletion of old ads completed.');
+    console.log("Old ads deleted.");
   } catch (err) {
-    logger.error("Error in scheduled deletion:", err);
+    logger.error("Scheduled deletion error:", err);
   }
 }, {
   scheduled: true,
-  timezone: "Asia/Riyadh"
+  timezone: "Asia/Riyadh",
 });
 
-// Middleware لمعالجة الأخطاء (يجب أن يكون في النهاية)
+// الأخطاء
 app.use(errorHandler);
 
-// بدء الخادم
-const PORT =3000;
+// التشغيل
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on http://localhost:${PORT}`);
 });
